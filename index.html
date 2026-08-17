@@ -337,13 +337,13 @@ select[multiple]{height:auto;}
 <div id="modal-root"></div>
 
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="js/supabase.js"></script>
+
 <script>
 /* ============================= CLOUD / AUTH ============================= */
-const SUPABASE_URL = 'https://tmdqjsbpgpvpwqryckcb.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_eqidn56P_QNeWZ2ivnicKw_l7SHccTf';
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
 let authUser = null;
 let pushTimer = null;
 
