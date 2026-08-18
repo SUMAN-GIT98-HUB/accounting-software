@@ -489,12 +489,21 @@ function defaultPayrollTax(){
       {upto:2000000, rate:30},
       {upto:null, rate:36}
     ],
-    ssfEmployeeRate: 11,
+       ssfEmployeeRate: 11,
     ssfEmployerRate: 20,
     ssfBase: 'basic', // 'basic' or 'gross'
     ssfDeductibleFromTaxable: true,
     waiveFirstSlabIfSSF: true, // treats the first slab as the SST portion, waived when the employee is SSF-enrolled
-    roundTax: true
+    roundTax: true,
+    // Retirement contribution deduction (SSF + CIT combined) — Income Tax Act style rule:
+    // deductible amount is the LOWEST of the actual contribution, this absolute annual cap,
+    // and this fraction of assessable (gross) income. All editable — confirm against the
+    // current Finance Act before relying on these for real payroll.
+    retirementCombinedCap: 500000,
+    retirementFractionPercent: 33.33,
+    lifeInsuranceCap: 40000,
+    otherDeductionLabel: 'Other Allowable Deduction (e.g. health insurance)',
+    otherDeductionCap: 20000
   };
 }
 
@@ -564,8 +573,16 @@ function migrateState(){
   if(!state.stockItems) state.stockItems = [];
   if(!state.stockTxns) state.stockTxns = [];
   // Backward-compatibility: older saved data predates Payroll.
-  if(!state.employees) state.employees = [];
+ if(!state.employees) state.employees = [];
   if(!state.payrollTax) state.payrollTax = defaultPayrollTax();
+  // Backward-compatibility: older saved data predates the CIT / life insurance / other
+  // allowable deduction fields on Tax Settings — merge in defaults for any that are missing.
+  {
+    const ptDefaults = defaultPayrollTax();
+    ['retirementCombinedCap','retirementFractionPercent','lifeInsuranceCap','otherDeductionLabel','otherDeductionCap'].forEach(k=>{
+      if(state.payrollTax[k]===undefined) state.payrollTax[k] = ptDefaults[k];
+    });
+  }
   if(!state.payrollRuns) state.payrollRuns = [];
 }
 function persist(){
@@ -3764,33 +3781,62 @@ function computePayrollLine(input){
   const ssfEnrolled = !!input.ssfEnrolled;
   const ssfEmployee = ssfEnrolled ? Math.round(ssfBaseAmt * (Number(pt.ssfEmployeeRate)||0)/100 * 100)/100 : 0;
   const ssfEmployer = ssfEnrolled ? Math.round(ssfBaseAmt * (Number(pt.ssfEmployerRate)||0)/100 * 100)/100 : 0;
+  const citMonthly = Number(input.citMonthly||0);
+  const lifeInsuranceMonthly = Number(input.lifeInsuranceMonthly||0);
+  const otherAllowableMonthly = Number(input.otherAllowableMonthly||0);
   const otherDeductions = (input.otherDeductions||[]).reduce((s,d)=>s+Number(d.amount||0),0);
-  const taxableIncome = grossPay - (pt.ssfDeductibleFromTaxable ? ssfEmployee : 0);
+
+  // Retirement contribution deduction (SSF + CIT combined): the deductible amount is the
+  // LOWEST of (a) what was actually contributed, (b) the absolute annual cap, and (c) a
+  // fraction of assessable (gross) income — the standard rule, applied here monthly since
+  // tax is estimated month-by-month. All three figures are editable in Tax Settings.
+  const actualRetirementMonthly = ssfEmployee + citMonthly;
+  const retirementCapAbsoluteMonthly = (Number(pt.retirementCombinedCap)||0) / 12;
+  const retirementCapFractionMonthly = grossPay * ((Number(pt.retirementFractionPercent)||0)/100);
+  const retirementDeductible = pt.ssfDeductibleFromTaxable
+    ? Math.max(0, Math.min(actualRetirementMonthly, retirementCapAbsoluteMonthly, retirementCapFractionMonthly))
+    : 0;
+  const lifeInsuranceDeductible = Math.max(0, Math.min(lifeInsuranceMonthly, (Number(pt.lifeInsuranceCap)||0)/12));
+  const otherAllowableDeductible = Math.max(0, Math.min(otherAllowableMonthly, (Number(pt.otherDeductionCap)||0)/12));
+
+  const taxableIncome = grossPay - retirementDeductible - lifeInsuranceDeductible - otherAllowableDeductible;
   const incomeTax = calcMonthlyIncomeTax(taxableIncome, input.filingStatus, ssfEnrolled);
-  const netPay = Math.round((grossPay - ssfEmployee - incomeTax - otherDeductions)*100)/100;
-  return {basic, allowances:input.allowances||[], grossPay, ssfEmployee, ssfEmployer, otherDeductions:input.otherDeductions||[], otherDeductionsTotal:otherDeductions, incomeTax, netPay};
+  const netPay = Math.round((grossPay - ssfEmployee - citMonthly - incomeTax - otherDeductions)*100)/100;
+  return {
+    basic, allowances:input.allowances||[], grossPay, ssfEmployee, ssfEmployer,
+    citMonthly, lifeInsuranceMonthly, otherAllowableMonthly,
+    retirementDeductible, lifeInsuranceDeductible, otherAllowableDeductible,
+    otherDeductions:input.otherDeductions||[], otherDeductionsTotal:otherDeductions, incomeTax, netPay
+  };
 }
 function snapshotLineFromEmployee(emp){
   const computed = computePayrollLine(emp);
   return {
     employeeId: emp.id, name: emp.name, position: emp.position||'', filingStatus: emp.filingStatus||'Single', ssfEnrolled: !!emp.ssfEnrolled,
     basic: computed.basic, allowances: (emp.allowances||[]).map(a=>({label:a.label, amount:Number(a.amount||0)})),
+    citMonthly: Number(emp.citMonthly||0), lifeInsuranceMonthly: Number(emp.lifeInsuranceMonthly||0), otherAllowableMonthly: Number(emp.otherAllowableMonthly||0),
     otherDeductions: [],
     grossPay: computed.grossPay, ssfEmployee: computed.ssfEmployee, ssfEmployer: computed.ssfEmployer,
+    retirementDeductible: computed.retirementDeductible, lifeInsuranceDeductible: computed.lifeInsuranceDeductible, otherAllowableDeductible: computed.otherAllowableDeductible,
     otherDeductionsTotal: computed.otherDeductionsTotal, incomeTax: computed.incomeTax, netPay: computed.netPay
   };
 }
 function recalcRunLine(line){
   const computed = computePayrollLine(line);
-  Object.assign(line, {grossPay:computed.grossPay, ssfEmployee:computed.ssfEmployee, ssfEmployer:computed.ssfEmployer, otherDeductionsTotal:computed.otherDeductionsTotal, incomeTax:computed.incomeTax, netPay:computed.netPay});
+  Object.assign(line, {
+    grossPay:computed.grossPay, ssfEmployee:computed.ssfEmployee, ssfEmployer:computed.ssfEmployer,
+    retirementDeductible:computed.retirementDeductible, lifeInsuranceDeductible:computed.lifeInsuranceDeductible, otherAllowableDeductible:computed.otherAllowableDeductible,
+    otherDeductionsTotal:computed.otherDeductionsTotal, incomeTax:computed.incomeTax, netPay:computed.netPay
+  });
 }
 function payrollRunTotals(run){
   return run.lines.reduce((t,l)=>{
     t.basic+=Number(l.basic||0); t.allowances+=(l.allowances||[]).reduce((s,a)=>s+Number(a.amount||0),0);
     t.gross+=Number(l.grossPay||0); t.ssfEmployee+=Number(l.ssfEmployee||0); t.ssfEmployer+=Number(l.ssfEmployer||0);
+    t.cit+=Number(l.citMonthly||0);
     t.otherDeductions+=Number(l.otherDeductionsTotal||0); t.tax+=Number(l.incomeTax||0); t.net+=Number(l.netPay||0);
     return t;
-  }, {basic:0,allowances:0,gross:0,ssfEmployee:0,ssfEmployer:0,otherDeductions:0,tax:0,net:0});
+  }, {basic:0,allowances:0,gross:0,ssfEmployee:0,ssfEmployer:0,cit:0,otherDeductions:0,tax:0,net:0});
 }
 
 /* ---- Employee CRUD ---- */
@@ -3812,7 +3858,10 @@ function saveEmployee(id){
     label: tr.querySelector('.al-label').value.trim() || 'Allowance',
     amount: Number(tr.querySelector('.al-amount').value||0)
   })).filter(a=>a.amount>0 || a.label);
-  const payload = {name, position, empCode, panNo, joinDate, filingStatus, ssfEnrolled, basic, allowances:allowanceRows};
+  const citMonthly = Number(document.getElementById('emp-cit').value||0);
+  const lifeInsuranceMonthly = Number(document.getElementById('emp-life').value||0);
+  const otherAllowableMonthly = Number(document.getElementById('emp-other-ded').value||0);
+  const payload = {name, position, empCode, panNo, joinDate, filingStatus, ssfEnrolled, basic, allowances:allowanceRows, citMonthly, lifeInsuranceMonthly, otherAllowableMonthly};
   if(id){
     Object.assign(state.employees.find(e=>e.id===id), payload);
   } else {
@@ -3873,6 +3922,11 @@ function savePayrollTaxRates(){
   state.payrollTax.ssfDeductibleFromTaxable = document.getElementById('pt-ssf-deductible').checked;
   state.payrollTax.waiveFirstSlabIfSSF = document.getElementById('pt-waive-first').checked;
   state.payrollTax.roundTax = document.getElementById('pt-round').checked;
+  state.payrollTax.retirementCombinedCap = Number(document.getElementById('pt-retire-cap').value||0);
+  state.payrollTax.retirementFractionPercent = Number(document.getElementById('pt-retire-fraction').value||0);
+  state.payrollTax.lifeInsuranceCap = Number(document.getElementById('pt-life-cap').value||0);
+  state.payrollTax.otherDeductionLabel = document.getElementById('pt-other-label').value.trim() || 'Other Allowable Deduction';
+  state.payrollTax.otherDeductionCap = Number(document.getElementById('pt-other-cap').value||0);
   // Recalculate every unposted run so edited parameters are reflected immediately.
   state.payrollRuns.filter(r=>!r.posted).forEach(r=> r.lines.forEach(recalcRunLine));
   persist(); render(); toast('Tax settings saved — unposted runs recalculated');
@@ -3933,6 +3987,9 @@ function runLineSetField(runId, employeeId, field, value){
   if(field==='basic') line.basic = Number(value||0);
   else if(field==='ssfEnrolled') line.ssfEnrolled = value;
   else if(field==='filingStatus') line.filingStatus = value;
+  else if(field==='citMonthly') line.citMonthly = Number(value||0);
+  else if(field==='lifeInsuranceMonthly') line.lifeInsuranceMonthly = Number(value||0);
+  else if(field==='otherAllowableMonthly') line.otherAllowableMonthly = Number(value||0);
   recalcRunLine(line);
   persist(); render();
 }
@@ -4006,6 +4063,7 @@ function postPayrollRun(runId){
   const salaryExpenseId = ensurePayrollLedger('Salary Expense', 'Expense', 'Indirect');
   const employerSsfExpenseId = t.ssfEmployer>0.004 ? ensurePayrollLedger('Employer SSF Contribution Expense', 'Expense', 'Indirect') : null;
   const ssfPayableId = (t.ssfEmployee+t.ssfEmployer)>0.004 ? ensurePayrollLedger('SSF Payable', 'Liability', 'Current') : null;
+  const citPayableId = t.cit>0.004 ? ensurePayrollLedger('CIT Contribution Payable', 'Liability', 'Current') : null;
   const tdsPayableId = t.tax>0.004 ? ensurePayrollLedger('TDS on Salary Payable', 'Liability', 'Current') : null;
   const otherPayableId = t.otherDeductions>0.004 ? ensurePayrollLedger('Other Salary Deductions Payable', 'Liability', 'Current') : null;
   const netPayableId = ensurePayrollLedger('Net Salary Payable', 'Liability', 'Current');
@@ -4014,6 +4072,7 @@ function postPayrollRun(runId){
   lines.push({ledgerId:salaryExpenseId, debit: Math.round(t.gross*100)/100, credit:0});
   if(employerSsfExpenseId) lines.push({ledgerId:employerSsfExpenseId, debit: Math.round(t.ssfEmployer*100)/100, credit:0});
   if(ssfPayableId) lines.push({ledgerId:ssfPayableId, debit:0, credit: Math.round((t.ssfEmployee+t.ssfEmployer)*100)/100});
+  if(citPayableId) lines.push({ledgerId:citPayableId, debit:0, credit: Math.round(t.cit*100)/100});
   if(tdsPayableId) lines.push({ledgerId:tdsPayableId, debit:0, credit: Math.round(t.tax*100)/100});
   if(otherPayableId) lines.push({ledgerId:otherPayableId, debit:0, credit: Math.round(t.otherDeductions*100)/100});
   lines.push({ledgerId:netPayableId, debit:0, credit: Math.round(t.net*100)/100});
@@ -4035,17 +4094,17 @@ function payrollRegisterRows(run){
     [`Payroll Register — ${run.periodLabel}`],
     [`Pay date: ${run.payDate}`],
     [],
-    ['Employee','Position','Basic','Allowances','Gross Pay','SSF (Employee)','SSF (Employer)','Income Tax','Other Deductions','Net Pay']
+    ['Employee','Position','Basic','Allowances','Gross Pay','SSF (Employee)','SSF (Employer)','CIT Contribution','Income Tax','Other Deductions','Net Pay']
   ];
   run.lines.forEach(l=>{
     rows.push([
       l.name, l.position||'',
       l.basic.toFixed(2), (l.allowances||[]).reduce((s,a)=>s+Number(a.amount||0),0).toFixed(2),
-      l.grossPay.toFixed(2), l.ssfEmployee.toFixed(2), l.ssfEmployer.toFixed(2),
+      l.grossPay.toFixed(2), l.ssfEmployee.toFixed(2), l.ssfEmployer.toFixed(2), Number(l.citMonthly||0).toFixed(2),
       l.incomeTax.toFixed(2), l.otherDeductionsTotal.toFixed(2), l.netPay.toFixed(2)
     ]);
   });
-  rows.push(['Total','', t.basic.toFixed(2), t.allowances.toFixed(2), t.gross.toFixed(2), t.ssfEmployee.toFixed(2), t.ssfEmployer.toFixed(2), t.tax.toFixed(2), t.otherDeductions.toFixed(2), t.net.toFixed(2)]);
+  rows.push(['Total','', t.basic.toFixed(2), t.allowances.toFixed(2), t.gross.toFixed(2), t.ssfEmployee.toFixed(2), t.ssfEmployer.toFixed(2), t.cit.toFixed(2), t.tax.toFixed(2), t.otherDeductions.toFixed(2), t.net.toFixed(2)]);
   return rows;
 }
 function exportPayrollRegisterXLSX(runId){
@@ -4090,9 +4149,10 @@ function exportPayslipXLSX(runId, employeeId){
     [],
     ['Deductions','Amount'],
     ['SSF Contribution', line.ssfEmployee.toFixed(2)],
+    ...((Number(line.citMonthly||0)>0 ? [['CIT Contribution', Number(line.citMonthly||0).toFixed(2)]] : [])),
     ['Income Tax (TDS)', line.incomeTax.toFixed(2)],
     ...((line.otherDeductions||[]).map(d=>[d.label, Number(d.amount||0).toFixed(2)])),
-    ['Total Deductions', (line.ssfEmployee+line.incomeTax+line.otherDeductionsTotal).toFixed(2)],
+    ['Total Deductions', (line.ssfEmployee+Number(line.citMonthly||0)+line.incomeTax+line.otherDeductionsTotal).toFixed(2)],
     [],
     ['Net Pay', line.netPay.toFixed(2)]
   ];
@@ -4107,10 +4167,10 @@ function renderPayrollRegisterPrintable(run){
   <div class="pagehead"><div><div class="eyebrow">Pay date ${esc(run.payDate)}</div><h1>Payroll Register</h1><p class="sub">${esc(run.periodLabel)}</p></div></div>
   <div class="sheet">
     <table style="font-size:12px;">
-      <thead><tr><th>Employee</th><th>Position</th><th class="num">Basic</th><th class="num">Allowances</th><th class="num">Gross</th><th class="num">SSF (Emp.)</th><th class="num">SSF (Empr.)</th><th class="num">Tax</th><th class="num">Other Ded.</th><th class="num">Net Pay</th></tr></thead>
+      <thead><tr><th>Employee</th><th>Position</th><th class="num">Basic</th><th class="num">Allowances</th><th class="num">Gross</th><th class="num">SSF (Emp.)</th><th class="num">SSF (Empr.)</th><th class="num">CIT</th><th class="num">Tax</th><th class="num">Other Ded.</th><th class="num">Net Pay</th></tr></thead>
       <tbody>
-        ${run.lines.map(l=>`<tr><td>${esc(l.name)}</td><td>${esc(l.position||'')}</td><td class="num">${fmt(l.basic)}</td><td class="num">${fmt((l.allowances||[]).reduce((s,a)=>s+Number(a.amount||0),0))}</td><td class="num">${fmt(l.grossPay)}</td><td class="num">${fmt(l.ssfEmployee)}</td><td class="num">${fmt(l.ssfEmployer)}</td><td class="num">${fmt(l.incomeTax)}</td><td class="num">${fmt(l.otherDeductionsTotal)}</td><td class="num">${fmt(l.netPay)}</td></tr>`).join('')}
-        <tr class="total"><td>Total</td><td></td><td class="num">${fmt(t.basic)}</td><td class="num">${fmt(t.allowances)}</td><td class="num">${fmt(t.gross)}</td><td class="num">${fmt(t.ssfEmployee)}</td><td class="num">${fmt(t.ssfEmployer)}</td><td class="num">${fmt(t.tax)}</td><td class="num">${fmt(t.otherDeductions)}</td><td class="num">${fmt(t.net)}</td></tr>
+        ${run.lines.map(l=>`<tr><td>${esc(l.name)}</td><td>${esc(l.position||'')}</td><td class="num">${fmt(l.basic)}</td><td class="num">${fmt((l.allowances||[]).reduce((s,a)=>s+Number(a.amount||0),0))}</td><td class="num">${fmt(l.grossPay)}</td><td class="num">${fmt(l.ssfEmployee)}</td><td class="num">${fmt(l.ssfEmployer)}</td><td class="num">${fmt(Number(l.citMonthly||0))}</td><td class="num">${fmt(l.incomeTax)}</td><td class="num">${fmt(l.otherDeductionsTotal)}</td><td class="num">${fmt(l.netPay)}</td></tr>`).join('')}
+        <tr class="total"><td>Total</td><td></td><td class="num">${fmt(t.basic)}</td><td class="num">${fmt(t.allowances)}</td><td class="num">${fmt(t.gross)}</td><td class="num">${fmt(t.ssfEmployee)}</td><td class="num">${fmt(t.ssfEmployer)}</td><td class="num">${fmt(t.cit)}</td><td class="num">${fmt(t.tax)}</td><td class="num">${fmt(t.otherDeductions)}</td><td class="num">${fmt(t.net)}</td></tr>
       </tbody>
     </table>
   </div>`;
@@ -4118,7 +4178,7 @@ function renderPayrollRegisterPrintable(run){
 function renderPayslipDoc(runId, employeeId){
   const run = payrollRunById(runId); const line = run && run.lines.find(l=>l.employeeId===employeeId);
   if(!run || !line) return '<p>Payslip not found.</p>';
-  const totalDeductions = line.ssfEmployee + line.incomeTax + line.otherDeductionsTotal;
+  const totalDeductions = line.ssfEmployee + Number(line.citMonthly||0) + line.incomeTax + line.otherDeductionsTotal;
   return `
   ${renderLetterhead()}
   <div class="pagehead"><div><div class="eyebrow">Pay date ${esc(run.payDate)}</div><h1>Payslip</h1><p class="sub">${esc(run.periodLabel)}</p></div></div>
@@ -4142,6 +4202,7 @@ function renderPayslipDoc(runId, employeeId){
         <div style="font-weight:700;border-bottom:1px solid var(--rule-strong);padding-bottom:4px;margin-bottom:6px;">Deductions</div>
         <table style="font-size:12.5px;"><tbody>
           <tr><td>SSF Contribution</td><td class="num">${fmt(line.ssfEmployee)}</td></tr>
+          ${Number(line.citMonthly||0)>0?`<tr><td>CIT Contribution</td><td class="num">${fmt(Number(line.citMonthly||0))}</td></tr>`:''}
           <tr><td>Income Tax (TDS)</td><td class="num">${fmt(line.incomeTax)}</td></tr>
           ${(line.otherDeductions||[]).map(d=>`<tr><td>${esc(d.label)}</td><td class="num">${fmt(Number(d.amount||0))}</td></tr>`).join('')}
           <tr style="font-weight:700;border-top:1px solid var(--rule);"><td>Total Deductions</td><td class="num">${fmt(totalDeductions)}</td></tr>
@@ -4152,14 +4213,15 @@ function renderPayslipDoc(runId, employeeId){
       <div style="font-weight:700;font-size:14px;">Net Pay</div>
       <div style="font-weight:700;font-size:16px;">${baseCurrency()} ${fmt(line.netPay)}</div>
     </div>
-    <p class="hint" style="margin-top:16px;">Employer's SSF contribution of ${fmt(line.ssfEmployer)} is remitted on the employee's behalf and does not reduce Net Pay.</p>
+    <p class="hint" style="margin-top:16px;">Employer's SSF contribution of ${fmt(line.ssfEmployer)} is remitted on the employee's behalf and does not reduce Net Pay. Taxable income for this payslip reflects a retirement deduction (SSF${line.citMonthly?' + CIT':''}) of ${fmt(line.retirementDeductible||0)}${(line.lifeInsuranceDeductible||line.otherAllowableDeductible)?`, life insurance deduction of ${fmt(line.lifeInsuranceDeductible||0)}, and ${esc(state.payrollTax.otherDeductionLabel||'other allowable deduction')} of ${fmt(line.otherAllowableDeductible||0)}`:''} — each capped per the limits in Tax Settings.</p>
   </div>`;
 }
 
 /* ---- Render: app screens ---- */
 function renderEmployeeEditRow(e){
   const isNew = !e;
-  const emp = e || {name:'', position:'', empCode:'', panNo:'', joinDate:'', filingStatus:'Single', ssfEnrolled:true, basic:0, allowances:[]};
+  const emp = e || {name:'', position:'', empCode:'', panNo:'', joinDate:'', filingStatus:'Single', ssfEnrolled:true, basic:0, allowances:[], citMonthly:0, lifeInsuranceMonthly:0, otherAllowableMonthly:0};
+  const otherLabel = state.payrollTax.otherDeductionLabel || 'Other Allowable Deduction';
   return `<tr><td colspan="7" style="padding:0;">
     <div class="sheet tight" style="background:#FBF0DA;border-color:var(--brass);margin:6px 0;">
       <div class="row3">
@@ -4183,6 +4245,11 @@ function renderEmployeeEditRow(e){
           ${(emp.allowances&&emp.allowances.length?emp.allowances:newEmployeeDraftAllowances().slice(0,0)).map(a=>`<tr><td><input class="al-label" type="text" value="${esc(a.label)}"></td><td><input class="al-amount" type="number" step="0.01" value="${a.amount}" style="width:110px;text-align:right;"></td><td><button class="btn secondary small" onclick="this.closest('tr').remove()">✕</button></td></tr>`).join('')}
         </tbody></table>
         <button class="btn secondary small" style="margin-top:6px;" onclick="empAddAllowanceRow()">+ Add Allowance</button>
+      </div>
+      <div class="row3" style="margin-top:6px;">
+        <div class="field"><label>CIT Contribution (monthly)</label><input id="emp-cit" type="number" step="0.01" value="${emp.citMonthly||0}"><p class="hint" style="margin-top:3px;">Deducted from net pay, like SSF, and counted with SSF toward the combined retirement deduction cap.</p></div>
+        <div class="field"><label>Life Insurance Premium (monthly)</label><input id="emp-life" type="number" step="0.01" value="${emp.lifeInsuranceMonthly||0}"><p class="hint" style="margin-top:3px;">Reduces taxable income only — not deducted from net pay.</p></div>
+        <div class="field"><label>${esc(otherLabel)} (monthly)</label><input id="emp-other-ded" type="number" step="0.01" value="${emp.otherAllowableMonthly||0}"><p class="hint" style="margin-top:3px;">Reduces taxable income only — not deducted from net pay.</p></div>
       </div>
       <div style="display:flex;gap:8px;margin-top:10px;">
         <button class="btn brass small" onclick="saveEmployee(${isNew?'null':`'${emp.id}'`})">Save Employee</button>
@@ -4301,10 +4368,30 @@ function renderPayrollTaxSettings(){
       <div class="field"><label>SSF Calculated On</label><select id="pt-ssf-base"><option value="basic" ${pt.ssfBase==='basic'?'selected':''}>Basic Salary</option><option value="gross" ${pt.ssfBase==='gross'?'selected':''}>Gross Pay</option></select></div>
     </div>
     <div class="row3">
-      <div class="field" style="display:flex;align-items:center;"><label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input id="pt-ssf-deductible" type="checkbox" ${pt.ssfDeductibleFromTaxable?'checked':''}> Employee's SSF contribution reduces taxable income</label></div>
+      <div class="field" style="display:flex;align-items:center;"><label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input id="pt-ssf-deductible" type="checkbox" ${pt.ssfDeductibleFromTaxable?'checked':''}> Retirement contributions (SSF + CIT) reduce taxable income</label></div>
       <div class="field" style="display:flex;align-items:center;"><label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input id="pt-waive-first" type="checkbox" ${pt.waiveFirstSlabIfSSF?'checked':''}> Waive first slab's tax for SSF-enrolled employees</label></div>
       <div class="field" style="display:flex;align-items:center;"><label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input id="pt-round" type="checkbox" ${pt.roundTax?'checked':''}> Round monthly tax to nearest whole rupee</label></div>
     </div>
+  </div>
+  <div class="sheet" style="margin-top:16px;">
+    <div class="card-title">Other Allowable Tax Deductions</div>
+    <p class="hint">These reduce <b>taxable income</b> when estimating monthly TDS. Each employee's actual CIT contribution, life insurance premium, and other allowable deduction are entered on their Employee Master record (and can be edited per payroll run).</p>
+    <div class="field">
+      <label>Combined Retirement Contribution Cap (SSF + CIT, annual)</label>
+      <input id="pt-retire-cap" type="number" step="0.01" value="${pt.retirementCombinedCap}">
+      <p class="hint" style="margin-top:4px;">The deductible amount is the <b>lowest</b> of: the employee's actual SSF + CIT contribution, this annual cap, or the fraction of gross income below.</p>
+    </div>
+    <div class="row2">
+      <div class="field"><label>...or Fraction of Assessable (Gross) Income, whichever is lower (%)</label><input id="pt-retire-fraction" type="number" step="0.01" value="${pt.retirementFractionPercent}"></div>
+      <div class="field"><label>Life Insurance Premium Cap (annual)</label><input id="pt-life-cap" type="number" step="0.01" value="${pt.lifeInsuranceCap}"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Other Allowable Deduction — Label</label><input id="pt-other-label" type="text" value="${esc(pt.otherDeductionLabel)}" placeholder="e.g. Health Insurance Premium"></div>
+      <div class="field"><label>Other Allowable Deduction Cap (annual)</label><input id="pt-other-cap" type="number" step="0.01" value="${pt.otherDeductionCap}"></div>
+    </div>
+    <p class="hint">Example (default 500,000 / 33.33%): an employee contributing 700,000/year combined SSF+CIT against 2,000,000 gross can only deduct 500,000 (the absolute cap, since 1/3 of gross = 666,667 and actual contribution = 700,000 — the lowest of the three wins). An employee contributing 400,000/year against 900,000 gross can deduct the full 400,000 (below both caps).</p>
+  </div>
+  <div class="sheet" style="margin-top:16px;">
     <button class="btn brass small" onclick="savePayrollTaxRates()">Save Tax Settings</button>
     <p class="hint" style="margin-top:10px;">Monthly tax is estimated by annualizing this month's taxable income (× 12), applying the slabs above, then dividing by 12 — the standard approach for monthly TDS estimation. This is a general-purpose calculator, not tax advice — always verify figures against the current Finance Act before relying on them.</p>
   </div>`;
@@ -4405,6 +4492,10 @@ function renderPayrollRunDetail(run){
             <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" ${l.ssfEnrolled?'checked':''} ${posted?'disabled':''} onchange="runLineSetField('${run.id}','${l.employeeId}','ssfEnrolled',this.checked)" style="margin:0;"> SSF (Employee)</label>
             <span class="pc-static">${fmt(l.ssfEmployee)}</span>
           </div>
+          <div class="pc-line">
+            <label>CIT Contribution</label>
+            <input type="number" step="0.01" value="${l.citMonthly||0}" ${posted?'disabled':''} onchange="runLineSetField('${run.id}','${l.employeeId}','citMonthly',this.value)">
+          </div>
           <div class="pc-line"><label>Income Tax (TDS)</label><span class="pc-static">${fmt(l.incomeTax)}</span></div>
           ${(l.otherDeductions||[]).map((d,di)=>`
           <div class="pc-line">
@@ -4413,9 +4504,23 @@ function renderPayrollRunDetail(run){
             ${!posted?`<button class="btn secondary small pc-rm" onclick="runLineRemoveDeduction('${run.id}','${l.employeeId}',${di})">✕</button>`:''}
           </div>`).join('')}
           ${!posted?`<button class="btn secondary small pc-addbtn" onclick="runLineAddDeduction('${run.id}','${l.employeeId}')">+ Deduction</button>`:''}
-          <div class="pc-subtotal"><span>Total Deductions</span><span class="num">${fmt(l.ssfEmployee+l.incomeTax+(l.otherDeductions||[]).reduce((s,d)=>s+Number(d.amount||0),0))}</span></div>
+          <div class="pc-subtotal"><span>Total Deductions</span><span class="num">${fmt(l.ssfEmployee+(l.citMonthly||0)+l.incomeTax+(l.otherDeductions||[]).reduce((s,d)=>s+Number(d.amount||0),0))}</span></div>
           <div class="pc-employer-note">Employer SSF contribution: ${fmt(l.ssfEmployer)} (not deducted from pay)</div>
         </div>
+      </div>
+      <div style="padding:14px 18px;border-top:1px solid var(--rule);background:var(--surface-2);">
+        <div class="pc-col-title">Tax Deduction Declarations <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--slate-light);">— reduce taxable income only, not deducted from net pay</span></div>
+        <div class="row2">
+          <div class="pc-line" style="margin-bottom:0;">
+            <label>Life Insurance Premium</label>
+            <input type="number" step="0.01" value="${l.lifeInsuranceMonthly||0}" ${posted?'disabled':''} onchange="runLineSetField('${run.id}','${l.employeeId}','lifeInsuranceMonthly',this.value)">
+          </div>
+          <div class="pc-line" style="margin-bottom:0;">
+            <label>${esc(state.payrollTax.otherDeductionLabel||'Other Allowable Deduction')}</label>
+            <input type="number" step="0.01" value="${l.otherAllowableMonthly||0}" ${posted?'disabled':''} onchange="runLineSetField('${run.id}','${l.employeeId}','otherAllowableMonthly',this.value)">
+          </div>
+        </div>
+        <p class="hint" style="margin-top:8px;">Retirement deduction recognised this period (SSF${l.citMonthly?' + CIT':''}, capped at the lower of actual contribution, ${fmt((Number(state.payrollTax.retirementCombinedCap)||0)/12)}/mo, or ${state.payrollTax.retirementFractionPercent}% of gross): <b class="num">${fmt(l.retirementDeductible||0)}</b> · Life insurance recognised: <b class="num">${fmt(l.lifeInsuranceDeductible||0)}</b> · ${esc(state.payrollTax.otherDeductionLabel||'Other')} recognised: <b class="num">${fmt(l.otherAllowableDeductible||0)}</b></p>
       </div>
       <div class="pc-foot">
         <span class="pc-net-label">Net Pay</span>
@@ -4465,6 +4570,7 @@ function renderPayroll(){
   </div>
   ${body}`;
 }
+
 
 /* ============================= SETTINGS ============================= */
 
