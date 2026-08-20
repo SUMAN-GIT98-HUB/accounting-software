@@ -114,7 +114,7 @@ nav button.tab.active .nav-icon{color:var(--brass);}
 
 /* Forms */
 label{display:block;font-size:11.5px;color:var(--slate);margin-bottom:4px;font-weight:500;}
-input[type=text],input[type=date],input[type=number],select,textarea{
+input[type=text],input[type=date],input[type=number],input[type=email],input[type=password],select,textarea{
   width:100%;padding:7px 9px;border:1px solid var(--rule-strong);border-radius:6px;background:#fff;color:var(--ink);
 }
 input:focus,select:focus,textarea:focus{border-color:var(--focus);}
@@ -254,12 +254,36 @@ select[multiple]{height:auto;}
 .logo-preview-wrap{display:flex;align-items:center;gap:12px;margin-top:6px;}
 .logo-preview{max-height:56px;max-width:160px;object-fit:contain;border:1px solid var(--rule);border-radius:6px;padding:6px;background:var(--surface);}
 .logo-preview-empty{font-size:12px;color:var(--slate-light);border:1px dashed var(--rule-strong);border-radius:6px;padding:14px 18px;}
-#auth-screen{min-height:100vh;align-items:center;justify-content:center;background:var(--ink);background-image:linear-gradient(180deg, var(--ink-soft) 0%, var(--ink) 62%);padding:20px;}
-.auth-card{width:100%;max-width:360px;background:var(--surface);border-radius:12px;padding:32px 28px;box-shadow:var(--shadow-md);}
-.auth-mark{width:40px;height:40px;border:1.5px solid var(--brass);border-radius:9px;display:flex;align-items:center;justify-content:center;font-family:'Manrope',sans-serif;font-weight:800;color:var(--brass);font-size:18px;background:rgba(183,121,31,.1);margin-bottom:14px;}
-.auth-msg{background:var(--red-soft);color:var(--red);font-size:12.5px;padding:8px 12px;border-radius:6px;margin-bottom:12px;}
-.auth-card a{color:var(--blue);text-decoration:none;font-weight:500;}
-.auth-card a:hover{text-decoration:underline;}
+#auth-screen{min-height:100vh;align-items:center;justify-content:center;background:var(--ink);background-image:radial-gradient(1100px 620px at 12% -10%, rgba(183,121,31,.18), transparent 60%), linear-gradient(180deg, var(--ink-soft) 0%, var(--ink) 62%);padding:20px;}
+.auth-wrap{width:100%;max-width:840px;display:flex;background:var(--surface);border-radius:16px;overflow:hidden;box-shadow:var(--shadow-md), 0 24px 60px rgba(11,18,32,.35);}
+.auth-brand-panel{flex:1 1 340px;background:var(--ink);background-image:radial-gradient(620px 420px at 100% 0%, rgba(183,121,31,.22), transparent 60%), linear-gradient(165deg, var(--ink-soft) 0%, var(--ink) 100%);color:#fff;padding:40px 36px;display:flex;flex-direction:column;justify-content:space-between;}
+.auth-logo{display:flex;align-items:center;gap:10px;}
+.auth-logo .mark-sq{width:38px;height:38px;border-radius:9px;background:rgba(183,121,31,.18);border:1.5px solid var(--brass);display:flex;align-items:center;justify-content:center;font-family:'Manrope',sans-serif;font-weight:800;color:var(--brass);font-size:16px;flex-shrink:0;}
+.auth-logo .wordmark{font-family:'Manrope',sans-serif;font-weight:800;font-size:19px;letter-spacing:-.01em;}
+.auth-brand-panel .wordmark{color:#fff;}
+.auth-brand-panel h2{font-family:'Manrope',sans-serif;font-size:23px;line-height:1.35;margin:30px 0 12px;color:#fff;font-weight:700;letter-spacing:-.01em;}
+.auth-brand-panel p.tagline{color:#B7C0D6;font-size:13px;line-height:1.6;margin:0 0 26px;}
+.auth-feature-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:12px;}
+.auth-feature-list li{display:flex;align-items:flex-start;gap:10px;font-size:12.5px;color:#D7DCEA;line-height:1.4;}
+.auth-feature-list .dot{width:6px;height:6px;border-radius:50%;background:var(--brass);margin-top:5px;flex-shrink:0;}
+.auth-brand-panel .auth-foot{font-size:11px;color:#7C879E;margin-top:28px;}
+.auth-form-panel{flex:1 1 320px;padding:44px 40px;display:flex;flex-direction:column;justify-content:center;}
+.auth-form-panel .mobile-logo{display:none;align-items:center;gap:8px;margin-bottom:24px;}
+.auth-form-panel .mobile-logo .mark-sq{width:32px;height:32px;border-radius:8px;background:var(--brass-soft);border:1.5px solid var(--brass);display:flex;align-items:center;justify-content:center;font-family:'Manrope',sans-serif;font-weight:800;color:var(--brass);font-size:13px;}
+.auth-form-panel .mobile-logo .wordmark{color:var(--ink);font-size:16px;}
+.auth-form-panel h1{font-size:22px;margin-bottom:4px;}
+.auth-form-panel .sub{color:var(--slate);font-size:13px;margin-bottom:24px;}
+.auth-msg{background:var(--red-soft);color:var(--red);font-size:12.5px;padding:9px 12px;border-radius:7px;margin-bottom:14px;}
+.auth-form-panel label{font-size:12px;font-weight:600;color:var(--ink);}
+.auth-form-panel input{padding:10px 12px;font-size:13.5px;}
+.auth-form-panel a{color:var(--blue);text-decoration:none;font-weight:500;}
+.auth-form-panel a:hover{text-decoration:underline;}
+@media(max-width:720px){
+  .auth-brand-panel{display:none;}
+  .auth-form-panel .mobile-logo{display:flex;}
+  .auth-wrap{border-radius:14px;max-width:420px;}
+  .auth-form-panel{padding:36px 28px;}
+}
 
 /* Payroll calculator */
 .pr-toolbar{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:18px;}
