@@ -943,7 +943,10 @@ function icon(name, cls){
 let jLines = []; // working journal-entry line buffer
 let editingEntryId = null;
 
-
+  /* ============================= CHART OF ACCOUNTS ============================= */
+let editingAssetCatId = null, editingAssetId = null, disposingAssetId = null, postingDisposalAssetId = null;
+let editingStockItemId = null, editingStockTxnId = null, stockTxnFormType = null, selectedStockItemId = null;
+  
 /* ============================= JOURNAL ENTRY ============================= */
 function renderJournal(){
   const total = {d:0,c:0};
