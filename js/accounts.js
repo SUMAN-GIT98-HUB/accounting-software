@@ -1,8 +1,6 @@
 
 /* ============================= CHART OF ACCOUNTS ============================= */
 let editingGroupId = null, editingLedgerId = null;
-let editingAssetCatId = null, editingAssetId = null, disposingAssetId = null, postingDisposalAssetId = null;
-let editingStockItemId = null, editingStockTxnId = null, stockTxnFormType = null, selectedStockItemId = null;
 function renderAccounts(){
   const groups = state.groups;
   const natures = ['Asset','Liability','Equity','Income','Expense'];
